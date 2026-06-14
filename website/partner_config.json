@@ -1,5 +1,5 @@
 {
   "partner_name": "[PARTNER_FIRM_NAME]",
   "crm_type": "clio",
-  "crm_webhook_url": "https://httpbin.org/post"
+  "crm_webhook_url": "http://localhost:3000/api/partner/mock-webhook-receiver"
 }

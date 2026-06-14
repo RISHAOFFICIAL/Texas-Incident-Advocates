@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { createClient } = require('@libsql/client');
+const Database = require('better-sqlite3');
 const { randomUUID } = require('crypto');
 
 const app = express();
@@ -14,67 +14,51 @@ app.use(express.urlencoded({ extended: true }));
 // Serve built static assets from Vite
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Configure Turso / LibSQL client connection
-const useTurso = process.env.TURSO_DATABASE_URL ? true : false;
-const dbUrl = process.env.TURSO_DATABASE_URL || `file:${path.join(__dirname, 'leads.db')}`;
-const dbToken = process.env.TURSO_AUTH_TOKEN;
-
-console.log(`[DATABASE] Configured URL: ${dbUrl} (Turso: ${useTurso})`);
-const db = createClient({
-  url: dbUrl,
-  authToken: dbToken
-});
-
+// Initialize Local SQLite Database for Lead Logging
 const dbPath = path.join(__dirname, 'leads.db');
+const db = new Database(dbPath);
 
-// Asynchronously initialize database tables if they do not exist
-async function initDb() {
-  try {
-    await db.executeMultiple(`
-      CREATE TABLE IF NOT EXISTS leads (
-        id TEXT PRIMARY KEY,
-        incident_type TEXT NOT NULL,
-        role TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        defendant TEXT,
-        legal_status TEXT NOT NULL,
-        first_name TEXT NOT NULL,
-        last_name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        county TEXT NOT NULL,
-        state TEXT NOT NULL,
-        details TEXT,
-        score INTEGER NOT NULL,
-        tier TEXT NOT NULL,
-        latitude REAL,
-        longitude REAL,
-        commodity TEXT,
-        operator TEXT,
-        parcel_id TEXT,
-        landowner_name TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
+// Force clean, full production schema for leads and outbox
+db.exec(`
+  DROP TABLE IF EXISTS outbox;
+  DROP TABLE IF EXISTS leads;
 
-      CREATE TABLE IF NOT EXISTS outbox (
-        id TEXT PRIMARY KEY,
-        lead_id TEXT NOT NULL,
-        recipient_email TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        body TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(lead_id) REFERENCES leads(id)
-      );
-    `);
-    console.log('[DATABASE] Tables initialized successfully (leads & outbox)');
-  } catch (err) {
-    console.error('[DATABASE INIT ERROR] Failed to initialize table schema:', err.message);
-  }
-}
+  CREATE TABLE leads (
+    id TEXT PRIMARY KEY,
+    incident_type TEXT NOT NULL,
+    role TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    defendant TEXT,
+    legal_status TEXT NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    county TEXT NOT NULL,
+    state TEXT NOT NULL,
+    details TEXT,
+    score INTEGER NOT NULL,
+    tier TEXT NOT NULL,
+    latitude REAL,
+    longitude REAL,
+    commodity TEXT,
+    operator TEXT,
+    parcel_id TEXT,
+    landowner_name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 
-// Call initialization
-initDb();
+  CREATE TABLE outbox (
+    id TEXT PRIMARY KEY,
+    lead_id TEXT NOT NULL,
+    recipient_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(lead_id) REFERENCES leads(id)
+  );
+`);
 
 // Simple custom ID generator in case crypto fails
 function generateId() {
@@ -165,7 +149,7 @@ function calculateLeadScore(lead) {
   return { score, tier };
 }
 
-// Function to dynamically load partner config
+// Function to dynamically load partner config (Task ID: 3efe8f4a-793a-4f6a-8d67-c1613c081ba7)
 function getPartnerConfig() {
   const configPath = path.join(__dirname, 'partner_config.json');
   try {
@@ -178,12 +162,12 @@ function getPartnerConfig() {
   return {
     partner_name: "[PARTNER_FIRM_NAME]",
     crm_type: "clio",
-    crm_webhook_url: "https://httpbin.org/post"
+    crm_webhook_url: "https://hook.make.com/your_unique_webhook_id"
   };
 }
 
 // API Route for Lead Triage & Submission
-app.post('/api/submit', async (req, res) => {
+app.post('/api/submit', (req, res) => {
   const {
     incidentType,
     role,
@@ -218,37 +202,38 @@ app.post('/api/submit', async (req, res) => {
     const leadId = generateId();
     const { score, tier } = calculateLeadScore(req.body);
 
-    // Insert lead with full GIS match & enrichment parameters
-    await db.execute({
-      sql: `INSERT INTO leads (
+    // Insert lead with full GIS match & enrichment parameters into SQLite Leads table
+    const stmt = db.prepare(`
+      INSERT INTO leads (
         id, incident_type, role, severity, defendant, legal_status,
         first_name, last_name, email, phone, county, state, details, score, tier,
         latitude, longitude, commodity, operator, parcel_id, landowner_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        leadId,
-        incidentType,
-        role,
-        severity,
-        defendant || '',
-        legalStatus,
-        firstName,
-        lastName,
-        email,
-        phone,
-        county,
-        state,
-        details || '',
-        score,
-        tier,
-        latitude ? parseFloat(latitude) : null,
-        longitude ? parseFloat(longitude) : null,
-        commodity || '',
-        operator || defendant || '',
-        parcelId || '',
-        landownerName || ''
-      ]
-    });
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      leadId,
+      incidentType,
+      role,
+      severity,
+      defendant || '',
+      legalStatus,
+      firstName,
+      lastName,
+      email,
+      phone,
+      county,
+      state,
+      details || '',
+      score,
+      tier,
+      latitude ? parseFloat(latitude) : null,
+      longitude ? parseFloat(longitude) : null,
+      commodity || '',
+      operator || defendant || '',
+      parcelId || '',
+      landownerName || ''
+    );
 
     console.log(`[LEAD LOGGED] ID: ${leadId} | Name: ${firstName} ${lastName} | Tier: ${tier} | Score: ${score}`);
 
@@ -293,14 +278,14 @@ to exclusive territory attorney retainers.
 ============================================================
       `.trim();
 
-      await db.execute({
-        sql: `INSERT INTO outbox (id, lead_id, recipient_email, subject, body, status)
-              VALUES (?, ?, ?, ?, ?, ?)`,
-        args: [alertId, leadId, recipient, subject, body, 'pending']
-      });
+      const outboxStmt = db.prepare(`
+        INSERT INTO outbox (id, lead_id, recipient_email, subject, body, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      outboxStmt.run(alertId, leadId, recipient, subject, body, 'pending');
       console.log(`[ALERT QUEUED] Outbox Alert ID: ${alertId} | Recipient: ${recipient} | Subject: ${subject}`);
 
-      // Dynamic CRM Webhook Selection
+      // Dynamic CRM Webhook Selection (Task ID: 3efe8f4a-793a-4f6a-8d67-c1613c081ba7)
       const config = getPartnerConfig();
       const webhookUrl = process.env.PARTNER_CRM_WEBHOOK_URL || config.crm_webhook_url;
       const crmType = (process.env.PARTNER_CRM_TYPE || config.crm_type || 'standard').toLowerCase();
@@ -391,18 +376,23 @@ to exclusive territory attorney retainers.
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      .then(async response => {
+      .then(response => {
         console.log(`[WEBHOOK SENT] CRM Webhook responded with status: ${response.status}`);
         if (response.ok) {
-          await db.execute({
-            sql: "UPDATE outbox SET status = 'sent' WHERE id = ?",
-            args: [alertId]
-          });
+          const updateStmt = db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?");
+          updateStmt.run(alertId);
           console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'sent'`);
+        } else {
+          const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
+          updateStmt.run(alertId);
+          console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'failed' (response status: ${response.status})`);
         }
       })
       .catch(webhookErr => {
         console.error(`[WEBHOOK ERROR] Failed to push to CRM Webhook:`, webhookErr.message);
+        const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
+        updateStmt.run(alertId);
+        console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'failed' due to network error`);
       });
     }
 
@@ -423,7 +413,7 @@ to exclusive territory attorney retainers.
   }
 });
 
-// Middleware to secure partner config endpoints
+// Middleware to secure partner config endpoints (Task ID: fe0bf925-f526-406c-a460-8b456c567159)
 const verifyPasscode = (req, res, next) => {
   const passcode = req.headers['x-passcode'] || req.query.passcode || (req.body && req.body.passcode);
   if (passcode !== 'txpsb2026') {
@@ -432,7 +422,7 @@ const verifyPasscode = (req, res, next) => {
   next();
 };
 
-// GET Route to fetch the partner configuration
+// GET Route to fetch the partner configuration (Task ID: fe0bf925-f526-406c-a460-8b456c567159)
 app.get('/api/partner/config', verifyPasscode, (req, res) => {
   try {
     const config = getPartnerConfig();
@@ -443,7 +433,7 @@ app.get('/api/partner/config', verifyPasscode, (req, res) => {
   }
 });
 
-// POST Route to update partner configuration
+// POST Route to update partner configuration (Task ID: fe0bf925-f526-406c-a460-8b456c567159)
 app.post('/api/partner/config', verifyPasscode, (req, res) => {
   const { crm_webhook_url, crm_type, partner_name } = req.body;
 
@@ -472,7 +462,7 @@ app.post('/api/partner/config', verifyPasscode, (req, res) => {
   }
 });
 
-// POST Route to test partner CRM Webhook with a sample payload
+// POST Route to test partner CRM Webhook with a sample payload (Task ID: fe0bf925-f526-406c-a460-8b456c567159)
 app.post('/api/partner/test-webhook', verifyPasscode, async (req, res) => {
   try {
     const config = getPartnerConfig();
@@ -608,10 +598,11 @@ app.post('/api/partner/test-webhook', verifyPasscode, async (req, res) => {
 });
 
 // GET Route to list leads (for B2B attorney portal audits)
-app.get('/api/leads', async (req, res) => {
+app.get('/api/leads', (req, res) => {
   try {
-    const result = await db.execute('SELECT * FROM leads ORDER BY created_at DESC');
-    res.json({ success: true, count: result.rows.length, leads: result.rows });
+    const stmt = db.prepare('SELECT * FROM leads ORDER BY created_at DESC');
+    const leads = stmt.all();
+    res.json({ success: true, count: leads.length, leads });
   } catch (err) {
     console.error('Database read error:', err);
     res.status(500).json({ success: false, message: 'Database read failure.' });
@@ -619,28 +610,20 @@ app.get('/api/leads', async (req, res) => {
 });
 
 // GET Route to list live scraper-fed incidents (Task ID: d2975342-5bdb-4453-add3-2ac1bfeaf4b7)
-app.get('/api/incidents', async (req, res) => {
+app.get('/api/incidents', (req, res) => {
   let incDb;
-  let shouldClose = false;
   try {
-    if (useTurso) {
-      incDb = db;
-    } else {
-      const localIncDbPath = process.env.INCIDENTS_DB_PATH || path.join(__dirname, 'incidents.db') || '/home/team/shared/incidents.db';
-      incDb = createClient({
-        url: 'file:' + localIncDbPath
-      });
-      shouldClose = true;
-    }
+    const incidentsDbPath = '/home/team/shared/incidents.db';
+    incDb = new Database(incidentsDbPath, { readonly: true });
     
-    const result = await incDb.execute(`
+    const stmt = incDb.prepare(`
       SELECT id, agency, operator, incident_date, location_raw, latitude, longitude, commodity, volume_released, unit, severity_score, raw_data_json 
       FROM incidents 
       ORDER BY incident_date DESC 
       LIMIT 100
     `);
     
-    const rows = result.rows;
+    const rows = stmt.all();
     
     const mapped = rows.map(row => {
       let county = 'Unknown County';
@@ -705,23 +688,173 @@ app.get('/api/incidents', async (req, res) => {
       incidents: mapped
     });
   } catch (err) {
-    console.error('Error fetching incidents from db:', err);
+    console.error('Error fetching incidents from shared db:', err);
     res.status(500).json({
       success: false,
       message: 'Failed to retrieve live incident logs from shared repository.'
     });
+  } finally {
+    if (incDb) {
+      try {
+        incDb.close();
+      } catch (e) {
+        console.error('Error closing incidents db connection:', e);
+      }
+    }
   }
 });
 
-// GET Route to list queued routing alerts
-app.get('/api/outbox', async (req, res) => {
+// GET Route to list queued routing alerts (Task ID: 469c97b4-16b8-41d6-90b4-0617e2ea12a6)
+app.get('/api/outbox', (req, res) => {
   try {
-    const result = await db.execute('SELECT * FROM outbox ORDER BY created_at DESC');
-    res.json({ success: true, count: result.rows.length, alerts: result.rows });
+    const stmt = db.prepare('SELECT * FROM outbox ORDER BY created_at DESC');
+    const alerts = stmt.all();
+    res.json({ success: true, count: alerts.length, alerts });
   } catch (err) {
     console.error('Database read error:', err);
     res.status(500).json({ success: false, message: 'Outbox read failure.' });
   }
+});
+
+// POST Route to retry a failed/pending outbox dispatch
+app.post('/api/partner/retry-dispatch/:id', verifyPasscode, async (req, res) => {
+  const alertId = req.params.id;
+  try {
+    const stmt = db.prepare('SELECT * FROM outbox WHERE id = ?');
+    const alert = stmt.get(alertId);
+    if (!alert) {
+      return res.status(404).json({ success: false, message: 'Alert outbox record not found.' });
+    }
+
+    // Load current partner config
+    const config = getPartnerConfig();
+    const webhookUrl = config.crm_webhook_url;
+    const crmType = (config.crm_type || 'standard').toLowerCase();
+
+    if (!webhookUrl || webhookUrl.includes('your_unique_webhook_id') || webhookUrl === '') {
+      return res.status(400).json({ success: false, message: 'Please configure a valid webhook URL before retrying.' });
+    }
+
+    // Fetch the lead associated with this outbox alert
+    const leadStmt = db.prepare('SELECT * FROM leads WHERE id = ?');
+    const lead = leadStmt.get(alert.lead_id);
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Associated lead record not found.' });
+    }
+
+    // Construct payload based on crmType
+    let payload = {};
+    if (crmType === 'clio') {
+      payload = {
+        lead: {
+          first_name: lead.first_name,
+          last_name: lead.last_name,
+          email: lead.email,
+          phone: lead.phone,
+          message: `RETRY DISPATCH - Landowner reports pipeline incident. Details: ${lead.details || 'No description provided.'}`,
+          custom_fields: {
+            "Incident County": lead.county + (lead.state ? `, ${lead.state}` : ''),
+            "Incident State": lead.state || 'TX',
+            "Incident Latitude": lead.latitude ? parseFloat(lead.latitude) : null,
+            "Incident Longitude": lead.longitude ? parseFloat(lead.longitude) : null,
+            "Chemical Commodity": lead.commodity || lead.incident_type,
+            "Target Operator": lead.operator || lead.defendant || 'UNKNOWN',
+            "Incident Severity": lead.tier,
+            "Triage Score": lead.score,
+            "GIS Parcel ID": lead.parcel_id || 'N/A',
+            "Registered Landowner": lead.landowner_name || `${lead.first_name} ${lead.last_name}`,
+            "Landowner Relationship": lead.role,
+            "Legal Status": lead.legal_status === 'yes' ? 'HAS ATTORNEY / SIGNED RELEASE' : 'NO ATTORNEY / NO RELEASES SIGNED'
+          }
+        }
+      };
+    } else if (crmType === 'filevine') {
+      payload = {
+        firstName: lead.first_name,
+        lastName: lead.last_name,
+        email: lead.email,
+        phone: lead.phone,
+        notes: `RETRY DISPATCH - Rupture/Spill reported. Details: ${lead.details || 'No description provided.'}`,
+        county: lead.county,
+        state: lead.state || 'TX',
+        customFields: {
+          parcelId: lead.parcel_id || 'N/A',
+          landownerName: lead.landowner_name || `${lead.first_name} ${lead.last_name}`,
+          relationship: lead.role,
+          incidentLatitude: lead.latitude ? parseFloat(lead.latitude) : null,
+          incidentLongitude: lead.longitude ? parseFloat(lead.longitude) : null,
+          spilledCommodity: lead.commodity || lead.incident_type,
+          targetOperator: lead.operator || lead.defendant || 'UNKNOWN',
+          triageScore: lead.score,
+          triageTier: lead.tier,
+          legalStatus: lead.legal_status === 'yes' ? 'HAS ATTORNEY / SIGNED RELEASE' : 'NO ATTORNEY / NO RELEASES SIGNED',
+          incidentDetails: lead.details || 'No description provided.'
+        }
+      };
+    } else {
+      payload = {
+        alertId: alert.id,
+        leadId: lead.id,
+        tier: lead.tier,
+        score: lead.score,
+        firstName: lead.first_name,
+        lastName: lead.last_name,
+        email: lead.email,
+        phone: lead.phone,
+        county: lead.county,
+        state: lead.state,
+        incidentType: lead.incident_type,
+        role: lead.role,
+        severity: lead.severity,
+        defendant: lead.operator || lead.defendant || 'UNKNOWN',
+        legalStatus: lead.legal_status,
+        details: "RETRY DISPATCH - " + lead.details,
+        gisMatch: {
+          parcelId: lead.parcel_id || 'N/A',
+          landownerName: lead.landowner_name || 'N/A',
+          latitude: lead.latitude || null,
+          longitude: lead.longitude || null,
+          commodity: lead.commodity || 'N/A'
+        },
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log(`[CRM RETRY PUSH] Retrying dispatch for alert ${alertId} (${crmType.toUpperCase()}) to webhook...`);
+
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const updateStmt = db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?");
+      updateStmt.run(alertId);
+      console.log(`[CRM RETRY SUCCESS] Webhook sent successfully for alert ${alertId}`);
+      return res.json({ success: true, message: 'Alert re-dispatched and sent successfully.' });
+    } else {
+      const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
+      updateStmt.run(alertId);
+      console.log(`[CRM RETRY FAILED] Webhook responded with status: ${response.status} for alert ${alertId}`);
+      return res.status(response.status).json({ success: false, message: `CRM webhook responded with error status: ${response.status}` });
+    }
+  } catch (err) {
+    console.error('Error retrying outbox dispatch:', err);
+    const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
+    updateStmt.run(alertId);
+    res.status(500).json({ success: false, message: 'Failed to re-dispatch alert: ' + err.message });
+  }
+});
+
+// Mock CRM Webhook Receiver for Sandbox Testing / Offline Reliability
+app.post('/api/partner/mock-webhook-receiver', (req, res) => {
+  console.log('[MOCK CRM RECEIVER] Received CRM payload:', JSON.stringify(req.body, null, 2));
+  res.json({
+    success: true,
+    message: 'Mock CRM successfully received and accepted the lead payload.',
+    received_at: new Date().toISOString()
+  });
 });
 
 // Fallback all other routes to served built React files (Client-Side routing support)
@@ -729,17 +862,12 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// Export the app for Vercel Serverless Functions
-module.exports = app;
-
-if (require.main === module) {
-  // Bind server to all interfaces ('0.0.0.0' or '::') on port 3000
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`===================================================`);
-    console.log(`  TEXAS PIPELINE SAFETY BOARD (TPSB) GATEWAY ACTIVE`);
-    console.log(`  Server listening on port :${PORT}`);
-    console.log(`  Bound to address: 0.0.0.0 (All Interfaces)`);
-    console.log(`  Durable local lead log: ${dbPath}`);
-    console.log(`===================================================`);
-  });
-}
+// Bind server to all interfaces ('0.0.0.0' or '::') on port 3000
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`===================================================`);
+  console.log(`  TEXAS PIPELINE SAFETY BOARD (TPSB) GATEWAY ACTIVE`);
+  console.log(`  Server listening on port :${PORT}`);
+  console.log(`  Bound to address: 0.0.0.0 (All Interfaces)`);
+  console.log(`  Durable local lead log: ${dbPath}`);
+  console.log(`===================================================`);
+});

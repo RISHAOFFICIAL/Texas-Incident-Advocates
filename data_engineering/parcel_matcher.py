@@ -1,12 +1,13 @@
 import sqlite3
 import requests
 import json
+import db
 
 DB_PATH = '/home/team/shared/incidents.db'
 GIS_URL = "https://mapserver.tnris.org/arcgis/rest/services/StratMap/Texas_Statewide_Parcels/FeatureServer/0/query"
 
 def create_matches_table():
-    conn = sqlite3.connect(DB_PATH)
+    conn = db.get_connection(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS parcel_matches (
@@ -58,7 +59,7 @@ def find_parcel(lat, lon):
     }
 
 def process_table(table_name):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db.get_connection(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute(f"SELECT id, latitude, longitude FROM {table_name} WHERE latitude IS NOT NULL AND longitude IS NOT NULL")

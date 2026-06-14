@@ -7,11 +7,12 @@ import json
 import uuid
 import os
 import re
+import db
 
 DB_PATH = '/home/team/shared/incidents.db'
 
 def create_table_if_not_exists():
-    conn = sqlite3.connect(DB_PATH)
+    conn = db.get_connection(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS federal_incidents (
@@ -60,7 +61,7 @@ def ingest_osha_data():
     naics_list = [486110, 211120, 213112, '486110', '211120', '213112']
     df_energy = df_tx[df_tx['Primary NAICS'].isin(naics_list)]
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = db.get_connection(DB_PATH)
     cursor = conn.cursor()
     
     inserted = 0
@@ -157,7 +158,7 @@ def ingest_phmsa_data():
         z = zipfile.ZipFile(io.BytesIO(response.content))
         # Find csv files and parse
         inserted, skipped = 0, 0
-        conn = sqlite3.connect(DB_PATH)
+        conn = db.get_connection(DB_PATH)
         cursor = conn.cursor()
         for filename in z.namelist():
             if "hl" in filename.lower() and filename.endswith(".csv"):
@@ -258,7 +259,7 @@ def ingest_phmsa_data():
             }
         ]
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = db.get_connection(DB_PATH)
         cursor = conn.cursor()
         inserted = 0
         skipped = 0

@@ -19,8 +19,9 @@ def ingest_rrc_xlsx(file_path, db_path):
         print(f"File {file_path} not found.")
         return
         
-    # Connect to SQLite
-    conn = sqlite3.connect(db_path)
+    # Connect to SQLite/Turso
+    import db
+    conn = db.get_connection(db_path)
     cursor = conn.cursor()
     
     # Create table if not exists
@@ -95,5 +96,22 @@ def ingest_rrc_xlsx(file_path, db_path):
     print(f"Finished: {count} new incidents ingested, {duplicates} duplicates skipped.")
 
 if __name__ == "__main__":
-    # Ingest 2025 data
-    ingest_rrc_xlsx("h8s_2025.xlsx", "/home/team/shared/incidents.db")
+    import glob
+    import subprocess
+    
+    # Try to find existing h8s_*.xlsx files
+    xlsx_files = glob.glob("h8s_*.xlsx")
+    if not xlsx_files:
+        print("No h8s_*.xlsx files found. Running scraper first...")
+        # Resolve script path
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_path = os.path.join(script_dir, "scrape_rrc_links.py")
+        subprocess.run(["python3", scraper_path], check=True)
+        xlsx_files = glob.glob("h8s_*.xlsx")
+        
+    if xlsx_files:
+        for file_path in xlsx_files:
+            print(f"Ingesting {file_path}...")
+            ingest_rrc_xlsx(file_path, "/home/team/shared/incidents.db")
+    else:
+        print("Error: No RRC Excel files available for ingestion.")

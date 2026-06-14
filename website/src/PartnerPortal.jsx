@@ -29,6 +29,12 @@ export default function PartnerPortal({ navigateTo }) {
   const [retryingAlertId, setRetryingAlertId] = useState(null);
   const [expandedAlertId, setExpandedAlertId] = useState(null);
 
+  // Direct mailers state (Task ID: b9181271-e2b6-43dc-af0b-c0ac74804df5)
+  const [mailersLoading, setMailersLoading] = useState(false);
+  const [mailersMock, setMailersMock] = useState(true);
+  const [mailersResults, setMailersResults] = useState(null);
+  const [mailersError, setMailersError] = useState(null);
+
   const PARTNER_PASSCODE = 'txpsb2026';
 
   // Poll for dashboard data
@@ -182,6 +188,34 @@ export default function PartnerPortal({ navigateTo }) {
       alert('Failed to connect to server for retry: ' + err.message);
     } finally {
       setRetryingAlertId(null);
+    }
+  };
+
+  // Trigger automated mailer batch campaign (Task ID: b9181271-e2b6-43dc-af0b-c0ac74804df5)
+  const handleTriggerMailers = async () => {
+    setMailersLoading(true);
+    setMailersError(null);
+    setMailersResults(null);
+    try {
+      const res = await fetch('/api/partner/trigger-mailers-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-passcode': PARTNER_PASSCODE
+        },
+        body: JSON.stringify({ mock: mailersMock })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMailersResults(data.results);
+      } else {
+        setMailersError(data.message || 'Failed to trigger direct mail batch.');
+      }
+    } catch (err) {
+      console.error('Error triggering mailers batch:', err);
+      setMailersError('Network error: Failed to connect to direct mail gateway.');
+    } finally {
+      setMailersLoading(false);
     }
   };
 
@@ -385,6 +419,24 @@ export default function PartnerPortal({ navigateTo }) {
           }}
         >
           <span style={{ marginRight: '6px' }}>⚙️</span> Integration Settings
+        </button>
+        <button 
+          onClick={() => setActiveTab('mailers')}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: activeTab === 'mailers' ? '#f59e0b' : '#94a3b8',
+            fontSize: '1rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            padding: '0.5rem 1rem',
+            borderBottom: activeTab === 'mailers' ? '3px solid #f59e0b' : '3px solid transparent',
+            marginBottom: '-9px',
+            transition: 'all 0.2s',
+            outline: 'none'
+          }}
+        >
+          <span style={{ marginRight: '6px' }}>✉️</span> Wave 1 Direct Mail
         </button>
       </div>
 
@@ -908,6 +960,171 @@ export default function PartnerPortal({ navigateTo }) {
               </table>
             </div>
           </div>
+        </div>
+      ) : activeTab === 'mailers' ? (
+        /* Direct Mail Campaign Tab */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          {/* Section Header */}
+          <div style={{
+            backgroundColor: '#1e293b',
+            borderRadius: '12px',
+            padding: '2rem',
+            border: '1px solid #334155',
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+          }}>
+            <h2 style={{ color: '#f8fafc', fontSize: '1.5rem', marginTop: 0, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              📬 Wave 1 Direct Mail Campaign
+            </h2>
+            <p style={{ color: '#cbd5e1', fontSize: '0.9rem', lineHeight: '1.6', margin: 0 }}>
+              Sourced from <code>wave1_direct_mail_targets.csv</code> containing 149 high-value landowners in Reeves and Ward counties. These targets have been matched with active spill coordinates and are ranked by threat severity. Triggering the campaign dynamically maps each target to Variant A (Spills), Variant B (Explosions), or Variant C (Chemical Exposures) using custom vector templates.
+            </p>
+          </div>
+
+          {/* Configuration and Trigger */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '2.5rem',
+            backgroundColor: '#1e293b',
+            borderRadius: '12px',
+            padding: '2.5rem',
+            border: '1px solid #334155',
+            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
+          }}>
+            <div>
+              <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginTop: 0, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                ⚡ Trigger Campaign Batch
+              </h3>
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', lineHeight: '1.5', marginBottom: '1.5rem' }}>
+                Run the batch job to compile and dispatch direct-mail postcards to all 149 landowners. By default, Sandbox Simulation Mode is enabled to test rendering and verify payload schemas without incurring actual PostGrid print costs.
+              </p>
+
+              <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="sandbox-mode"
+                  checked={mailersMock}
+                  onChange={(e) => setMailersMock(e.target.checked)}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+                <label htmlFor="sandbox-mode" style={{ color: '#cbd5e1', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer' }}>
+                  Enable Sandbox Simulation Mode (Recommended)
+                </label>
+              </div>
+
+              {mailersError && (
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  marginBottom: '1.5rem',
+                  fontSize: '0.85rem',
+                  backgroundColor: 'rgba(153, 27, 27, 0.5)',
+                  color: '#fca5a5',
+                  border: '1px solid #b91c1c'
+                }}>
+                  ❌ {mailersError}
+                </div>
+              )}
+
+              <button
+                onClick={handleTriggerMailers}
+                disabled={mailersLoading}
+                style={{
+                  padding: '14px 28px',
+                  backgroundColor: '#f59e0b',
+                  color: '#0f172a',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '0.95rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  opacity: mailersLoading ? 0.7 : 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  transition: 'background-color 0.2s'
+                }}
+              >
+                {mailersLoading ? 'Processing Batch...' : '🚀 Execute Direct Mail Batch'}
+              </button>
+            </div>
+
+            <div style={{ borderLeft: '1px solid #334155', paddingLeft: '2.5rem' }}>
+              <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginTop: 0, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                📊 Campaign Breakdown
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ backgroundColor: '#0f172a', padding: '1rem', borderRadius: '8px', border: '1px solid #334155' }}>
+                  <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>TOTAL TARGETS</span>
+                  <strong style={{ fontSize: '1.5rem', color: '#f8fafc' }}>149</strong>
+                </div>
+                <div style={{ backgroundColor: '#0f172a', padding: '1rem', borderRadius: '8px', border: '1px solid #334155' }}>
+                  <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>SPILL ADVISORY (01)</span>
+                  <strong style={{ fontSize: '1.5rem', color: '#60a5fa' }}>18</strong>
+                </div>
+                <div style={{ backgroundColor: '#0f172a', padding: '1rem', borderRadius: '8px', border: '1px solid #334155' }}>
+                  <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>EXPLOSION ADVISORY (02)</span>
+                  <strong style={{ fontSize: '1.5rem', color: '#f87171' }}>7</strong>
+                </div>
+                <div style={{ backgroundColor: '#0f172a', padding: '1rem', borderRadius: '8px', border: '1px solid #334155' }}>
+                  <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>H2S EXPOSURE (03)</span>
+                  <strong style={{ fontSize: '1.5rem', color: '#fbbf24' }}>124</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Results Output */}
+          {mailersResults && (
+            <div style={{
+              backgroundColor: '#1e293b',
+              borderRadius: '12px',
+              padding: '2rem',
+              border: '1px solid #334155',
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+            }}>
+              <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginTop: 0, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                ✅ Execution Results ({mailersResults.success} / {mailersResults.total} Successful)
+              </h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #334155' }}>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Target Owner</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Parcel ID</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Mapped Variant</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Delivery Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mailersResults.dispatched.map((d, index) => (
+                        <tr key={index} style={{ borderBottom: '1px solid #334155' }}>
+                          <td style={{ padding: '12px 16px', fontSize: '0.85rem', color: '#f8fafc', fontWeight: 700 }}>{d.owner_name}</td>
+                          <td style={{ padding: '12px 16px', fontSize: '0.85rem', color: '#94a3b8' }}>{d.parcel_id}</td>
+                          <td style={{ padding: '12px 16px', fontSize: '0.85rem', color: '#cbd5e1' }}>{d.variant_title || d.variant}</td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <span style={{
+                              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                              color: '#34d399',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              border: '1px solid rgba(16, 185, 129, 0.2)'
+                            }}>
+                              {d.status.toUpperCase()}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         /* Normal Dashboard View */

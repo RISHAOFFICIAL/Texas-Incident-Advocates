@@ -847,6 +847,26 @@ app.post('/api/partner/retry-dispatch/:id', verifyPasscode, async (req, res) => 
   }
 });
 
+// POST Route to trigger automated direct-mail batch (Task ID: b9181271-e2b6-43dc-af0b-c0ac74804df5)
+app.post('/api/partner/trigger-mailers-batch', verifyPasscode, async (req, res) => {
+  const isMock = req.body.mock !== false; // Defaults to mock simulation mode
+  try {
+    const { sendMailersBatch } = require('./send_mailers');
+    const results = await sendMailersBatch({ mock: isMock });
+    res.json({
+      success: true,
+      message: `Direct mail batch job initiated successfully.`,
+      results
+    });
+  } catch (err) {
+    console.error('[MAILERS BATCH ERROR] Failed to run batch:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initiate direct-mail batch job: ' + err.message
+    });
+  }
+});
+
 // Mock CRM Webhook Receiver for Sandbox Testing / Offline Reliability
 app.post('/api/partner/mock-webhook-receiver', (req, res) => {
   console.log('[MOCK CRM RECEIVER] Received CRM payload:', JSON.stringify(req.body, null, 2));

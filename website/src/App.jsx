@@ -25,6 +25,7 @@ export default function App() {
   const [activePin, setActivePin] = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [loadingIncidents, setLoadingIncidents] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Hash-based client-side routing for seamless SEO routes & bookmarking (Task ID: d2975342-5bdb-4453-add3-2ac1bfeaf4b7)
   useEffect(() => {
@@ -176,15 +177,18 @@ export default function App() {
             <div className="logo-tag">Texas Independent Safety Watchdog</div>
           </div>
         </div>
-        <ul className="nav-links">
-          <li><button onClick={() => navigateTo('#/')} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Home</button></li>
-          <li><button onClick={() => navigateTo('#/incidents/pipeline-explosions')} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Pipeline Explosions</button></li>
-          <li><button onClick={() => navigateTo('#/incidents/gas-leaks-h2s')} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>H₂S Gas Leaks</button></li>
-          <li><button onClick={() => navigateTo('#/incidents/oil-saltwater-spills')} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Oil &amp; Saltwater Spills</button></li>
+        <button className="hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation menu">
+          <span className={`hamburger-line ${menuOpen ? 'open' : ''}`}></span>
+          <span className={`hamburger-line ${menuOpen ? 'open' : ''}`}></span>
+          <span className={`hamburger-line ${menuOpen ? 'open' : ''}`}></span>
+        </button>
+        <ul className={`nav-links ${menuOpen ? 'open' : ''}`}>
+          <li><button onClick={() => { navigateTo('#/'); setMenuOpen(false); }} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Home</button></li>
+          <li><button onClick={() => { navigateTo('#/incidents/pipeline-explosions'); setMenuOpen(false); }} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Pipeline Explosions</button></li>
+          <li><button onClick={() => { navigateTo('#/incidents/gas-leaks-h2s'); setMenuOpen(false); }} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>H₂S Gas Leaks</button></li>
+          <li><button onClick={() => { navigateTo('#/incidents/oil-saltwater-spills'); setMenuOpen(false); }} className="nav-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>Oil &amp; Saltwater Spills</button></li>
         </ul>
-      </nav>
-
-      {/* RENDER VIEW 1: HOMEPAGE */}
+      </nav>      {/* RENDER VIEW 1: HOMEPAGE */}
       {view === 'home' && (
         <>
           <header className="hero">

@@ -88,8 +88,10 @@ function getMailerVariant(commodity) {
   }
 }
 
-// Perform merge replacements in the SVG template content
-function compileTemplate(svgContent, row, partnerConfig) {
+const QRCode = require('qrcode');
+
+// Perform merge replacements in the SVG template content and generate QR codes
+async function compileTemplate(svgContent, row, partnerConfig) {
   let compiled = svgContent;
 
   // Replace standard merge variables
@@ -120,6 +122,42 @@ function compileTemplate(svgContent, row, partnerConfig) {
   compiled = compiled.replace(/\[PARTNER_FIRM_NAME\]/g, partnerName);
   compiled = compiled.replace(/\[PARTNER_CITY\]/g, partnerCity);
   compiled = compiled.replace(/\[PARTNER_MANAGING_ATTORNEY\]/g, partnerAttorney);
+
+  // Check if SVG has [QR] placeholder and embed an actual QR code pointing to the live portal
+  if (compiled.includes('[QR]')) {
+    try {
+      const parcelIdEncoded = encodeURIComponent(row.parcel_id || '');
+      const qrUrl = `https://texas-incident-advocates-git-main-risha-alexis-projects.vercel.app?parcel_id=${parcelIdEncoded}`;
+      
+      // Generate QR code base64 PNG data URL
+      const qrDataUrl = await QRCode.toDataURL(qrUrl, { margin: 1, width: 250 });
+
+      // Determine where the QR box is to position the image and reposition other text nicely
+      if (compiled.includes('y="500"')) {
+        // H2S template: QR box Starts at y="500", goes down to 660. 
+        const imageElement = `<image href="${qrDataUrl}" x="75" y="510" width="100" height="100"/>`;
+        // Replace the original [QR] text element with empty text
+        compiled = compiled.replace(/>\[QR\]<\/text>/, '></text>');
+        // Shift captions down to prevent overlaps (original H2S has captions at y="570" and y="590")
+        compiled = compiled.replace(/y="570"/g, 'y="625"');
+        compiled = compiled.replace(/y="590"/g, 'y="640"');
+        // Inject image element inside SVG
+        compiled = compiled.replace('</svg>', `${imageElement}\n</svg>`);
+      } else {
+        // Spill and Explosion templates: QR box starts at y="510", goes down to 670.
+        const imageElement = `<image href="${qrDataUrl}" x="75" y="520" width="100" height="100"/>`;
+        // Replace the original [QR] text element with empty text
+        compiled = compiled.replace(/>\[QR\]<\/text>/, '></text>');
+        // Shift captions down to prevent overlaps (original Spill/Explosion has captions at y="580" and y="600")
+        compiled = compiled.replace(/y="580"/g, 'y="635"');
+        compiled = compiled.replace(/y="600"/g, 'y="650"');
+        // Inject image element inside SVG
+        compiled = compiled.replace('</svg>', `${imageElement}\n</svg>`);
+      }
+    } catch (err) {
+      console.error('Error generating QR code in compileTemplate:', err.message);
+    }
+  }
 
   // Wrap in simple HTML block for PostGrid rendering support
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;">${compiled}</body></html>`;
@@ -189,8 +227,8 @@ async function sendMailersBatch(options = {}) {
     const frontSvg = fs.readFileSync(frontPath, 'utf8');
     const backSvg = fs.readFileSync(backPath, 'utf8');
 
-    const compiledFront = compileTemplate(frontSvg, row, partnerConfig);
-    const compiledBack = compileTemplate(backSvg, row, partnerConfig);
+    const compiledFront = await compileTemplate(frontSvg, row, partnerConfig);
+    const compiledBack = await compileTemplate(backSvg, row, partnerConfig);
 
     // Format address per PostGrid standard API parameters
     let toAddress = {
@@ -339,4 +377,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { sendMailersBatch };
+module.exports = { sendMailersBatch, compileTemplate };

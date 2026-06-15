@@ -5,6 +5,7 @@ jspm_packages/
 # Build outputs
 dist/
 build/
+!website/dist/
 .svelte-kit/
 .next/
 out/

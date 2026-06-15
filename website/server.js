@@ -14,51 +14,124 @@ app.use(express.urlencoded({ extended: true }));
 // Serve built static assets from Vite
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// Database Client Selection (Local SQLite vs remote Turso)
+const useTurso = !!process.env.TURSO_DATABASE_URL;
+let tursoClient = null;
+
+if (useTurso) {
+  console.log(`[DATABASE] Production mode: Initializing Turso client for url: ${process.env.TURSO_DATABASE_URL}`);
+  try {
+    const { createClient } = require('@libsql/client');
+    tursoClient = createClient({
+      url: process.env.TURSO_DATABASE_URL,
+      authToken: process.env.TURSO_AUTH_TOKEN
+    });
+  } catch (err) {
+    console.error('[DATABASE] Failed to require @libsql/client:', err.message);
+  }
+}
+
 // Initialize Local SQLite Database for Lead Logging
 const dbPath = path.join(__dirname, 'leads.db');
 const db = new Database(dbPath);
 
-// Force clean, full production schema for leads and outbox
-db.exec(`
-  DROP TABLE IF EXISTS outbox;
-  DROP TABLE IF EXISTS leads;
+// Async Initialization for Turso or Local DB
+async function initDatabase() {
+  if (useTurso && tursoClient) {
+    try {
+      await tursoClient.execute(`
+        CREATE TABLE IF NOT EXISTS leads (
+          id TEXT PRIMARY KEY,
+          incident_type TEXT NOT NULL,
+          role TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          defendant TEXT,
+          legal_status TEXT NOT NULL,
+          first_name TEXT NOT NULL,
+          last_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          county TEXT NOT NULL,
+          state TEXT NOT NULL,
+          details TEXT,
+          score INTEGER NOT NULL,
+          tier TEXT NOT NULL,
+          latitude REAL,
+          longitude REAL,
+          commodity TEXT,
+          operator TEXT,
+          parcel_id TEXT,
+          landowner_name TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      await tursoClient.execute(`
+        CREATE TABLE IF NOT EXISTS outbox (
+          id TEXT PRIMARY KEY,
+          lead_id TEXT NOT NULL,
+          recipient_email TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(lead_id) REFERENCES leads(id)
+        );
+      `);
+      console.log('[DATABASE] Turso leads and outbox tables initialized successfully.');
+    } catch (err) {
+      console.error('[DATABASE] Error initializing Turso tables:', err.message);
+    }
+  } else {
+    // Force clean, full production schema for local leads and outbox
+    try {
+      db.exec(`
+        DROP TABLE IF EXISTS outbox;
+        DROP TABLE IF EXISTS leads;
 
-  CREATE TABLE leads (
-    id TEXT PRIMARY KEY,
-    incident_type TEXT NOT NULL,
-    role TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    defendant TEXT,
-    legal_status TEXT NOT NULL,
-    first_name TEXT NOT NULL,
-    last_name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    county TEXT NOT NULL,
-    state TEXT NOT NULL,
-    details TEXT,
-    score INTEGER NOT NULL,
-    tier TEXT NOT NULL,
-    latitude REAL,
-    longitude REAL,
-    commodity TEXT,
-    operator TEXT,
-    parcel_id TEXT,
-    landowner_name TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+        CREATE TABLE leads (
+          id TEXT PRIMARY KEY,
+          incident_type TEXT NOT NULL,
+          role TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          defendant TEXT,
+          legal_status TEXT NOT NULL,
+          first_name TEXT NOT NULL,
+          last_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          county TEXT NOT NULL,
+          state TEXT NOT NULL,
+          details TEXT,
+          score INTEGER NOT NULL,
+          tier TEXT NOT NULL,
+          latitude REAL,
+          longitude REAL,
+          commodity TEXT,
+          operator TEXT,
+          parcel_id TEXT,
+          landowner_name TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
 
-  CREATE TABLE outbox (
-    id TEXT PRIMARY KEY,
-    lead_id TEXT NOT NULL,
-    recipient_email TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    body TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(lead_id) REFERENCES leads(id)
-  );
-`);
+        CREATE TABLE outbox (
+          id TEXT PRIMARY KEY,
+          lead_id TEXT NOT NULL,
+          recipient_email TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(lead_id) REFERENCES leads(id)
+        );
+      `);
+      console.log('[DATABASE] Local SQLite leads and outbox tables re-created successfully.');
+    } catch (err) {
+      console.error('[DATABASE] Error initializing local tables:', err.message);
+    }
+  }
+}
+
+initDatabase();
 
 // Simple custom ID generator in case crypto fails
 function generateId() {
@@ -167,7 +240,7 @@ function getPartnerConfig() {
 }
 
 // API Route for Lead Triage & Submission
-app.post('/api/submit', (req, res) => {
+app.post('/api/submit', async (req, res) => {
   const {
     incidentType,
     role,
@@ -202,38 +275,71 @@ app.post('/api/submit', (req, res) => {
     const leadId = generateId();
     const { score, tier } = calculateLeadScore(req.body);
 
-    // Insert lead with full GIS match & enrichment parameters into SQLite Leads table
-    const stmt = db.prepare(`
-      INSERT INTO leads (
-        id, incident_type, role, severity, defendant, legal_status,
-        first_name, last_name, email, phone, county, state, details, score, tier,
-        latitude, longitude, commodity, operator, parcel_id, landowner_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    if (useTurso && tursoClient) {
+      await tursoClient.execute({
+        sql: `INSERT INTO leads (
+          id, incident_type, role, severity, defendant, legal_status,
+          first_name, last_name, email, phone, county, state, details, score, tier,
+          latitude, longitude, commodity, operator, parcel_id, landowner_name
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          leadId,
+          incidentType,
+          role,
+          severity,
+          defendant || '',
+          legalStatus,
+          firstName,
+          lastName,
+          email,
+          phone,
+          county,
+          state,
+          details || '',
+          score,
+          tier,
+          latitude ? parseFloat(latitude) : null,
+          longitude ? parseFloat(longitude) : null,
+          commodity || '',
+          operator || defendant || '',
+          parcelId || '',
+          landownerName || ''
+        ]
+      });
+    } else {
+      // Insert lead with full GIS match & enrichment parameters into SQLite Leads table
+      const stmt = db.prepare(`
+        INSERT INTO leads (
+          id, incident_type, role, severity, defendant, legal_status,
+          first_name, last_name, email, phone, county, state, details, score, tier,
+          latitude, longitude, commodity, operator, parcel_id, landowner_name
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-    stmt.run(
-      leadId,
-      incidentType,
-      role,
-      severity,
-      defendant || '',
-      legalStatus,
-      firstName,
-      lastName,
-      email,
-      phone,
-      county,
-      state,
-      details || '',
-      score,
-      tier,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null,
-      commodity || '',
-      operator || defendant || '',
-      parcelId || '',
-      landownerName || ''
-    );
+      stmt.run(
+        leadId,
+        incidentType,
+        role,
+        severity,
+        defendant || '',
+        legalStatus,
+        firstName,
+        lastName,
+        email,
+        phone,
+        county,
+        state,
+        details || '',
+        score,
+        tier,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null,
+        commodity || '',
+        operator || defendant || '',
+        parcelId || '',
+        landownerName || ''
+      );
+    }
 
     console.log(`[LEAD LOGGED] ID: ${leadId} | Name: ${firstName} ${lastName} | Tier: ${tier} | Score: ${score}`);
 
@@ -278,11 +384,19 @@ to exclusive territory attorney retainers.
 ============================================================
       `.trim();
 
-      const outboxStmt = db.prepare(`
-        INSERT INTO outbox (id, lead_id, recipient_email, subject, body, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
-      outboxStmt.run(alertId, leadId, recipient, subject, body, 'pending');
+      if (useTurso && tursoClient) {
+        await tursoClient.execute({
+          sql: `INSERT INTO outbox (id, lead_id, recipient_email, subject, body, status)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [alertId, leadId, recipient, subject, body, 'pending']
+        });
+      } else {
+        const outboxStmt = db.prepare(`
+          INSERT INTO outbox (id, lead_id, recipient_email, subject, body, status)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        outboxStmt.run(alertId, leadId, recipient, subject, body, 'pending');
+      }
       console.log(`[ALERT QUEUED] Outbox Alert ID: ${alertId} | Recipient: ${recipient} | Subject: ${subject}`);
 
       // Dynamic CRM Webhook Selection (Task ID: 3efe8f4a-793a-4f6a-8d67-c1613c081ba7)
@@ -376,22 +490,31 @@ to exclusive territory attorney retainers.
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      .then(response => {
+      .then(async response => {
         console.log(`[WEBHOOK SENT] CRM Webhook responded with status: ${response.status}`);
-        if (response.ok) {
-          const updateStmt = db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?");
-          updateStmt.run(alertId);
-          console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'sent'`);
+        const statusVal = response.ok ? 'sent' : 'failed';
+        if (useTurso && tursoClient) {
+          await tursoClient.execute({
+            sql: "UPDATE outbox SET status = ? WHERE id = ?",
+            args: [statusVal, alertId]
+          });
+        } else {
+          const updateStmt = db.prepare("UPDATE outbox SET status = ? WHERE id = ?");
+          updateStmt.run(statusVal, alertId);
+        }
+        console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to '${statusVal}'`);
+      })
+      .catch(async webhookErr => {
+        console.error(`[WEBHOOK ERROR] Failed to push to CRM Webhook:`, webhookErr.message);
+        if (useTurso && tursoClient) {
+          await tursoClient.execute({
+            sql: "UPDATE outbox SET status = 'failed' WHERE id = ?",
+            args: [alertId]
+          });
         } else {
           const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
           updateStmt.run(alertId);
-          console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'failed' (response status: ${response.status})`);
         }
-      })
-      .catch(webhookErr => {
-        console.error(`[WEBHOOK ERROR] Failed to push to CRM Webhook:`, webhookErr.message);
-        const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
-        updateStmt.run(alertId);
         console.log(`[OUTBOX UPDATED] Alert ID: ${alertId} status set to 'failed' due to network error`);
       });
     }
@@ -598,10 +721,16 @@ app.post('/api/partner/test-webhook', verifyPasscode, async (req, res) => {
 });
 
 // GET Route to list leads (for B2B attorney portal audits)
-app.get('/api/leads', (req, res) => {
+app.get('/api/leads', async (req, res) => {
   try {
-    const stmt = db.prepare('SELECT * FROM leads ORDER BY created_at DESC');
-    const leads = stmt.all();
+    let leads = [];
+    if (useTurso && tursoClient) {
+      const result = await tursoClient.execute('SELECT * FROM leads ORDER BY created_at DESC');
+      leads = result.rows;
+    } else {
+      const stmt = db.prepare('SELECT * FROM leads ORDER BY created_at DESC');
+      leads = stmt.all();
+    }
     res.json({ success: true, count: leads.length, leads });
   } catch (err) {
     console.error('Database read error:', err);
@@ -610,20 +739,30 @@ app.get('/api/leads', (req, res) => {
 });
 
 // GET Route to list live scraper-fed incidents (Task ID: d2975342-5bdb-4453-add3-2ac1bfeaf4b7)
-app.get('/api/incidents', (req, res) => {
-  let incDb;
+app.get('/api/incidents', async (req, res) => {
+  let incDb = null;
   try {
-    const incidentsDbPath = '/home/team/shared/incidents.db';
-    incDb = new Database(incidentsDbPath, { readonly: true });
-    
-    const stmt = incDb.prepare(`
-      SELECT id, agency, operator, incident_date, location_raw, latitude, longitude, commodity, volume_released, unit, severity_score, raw_data_json 
-      FROM incidents 
-      ORDER BY incident_date DESC 
-      LIMIT 100
-    `);
-    
-    const rows = stmt.all();
+    let rows = [];
+    if (useTurso && tursoClient) {
+      const result = await tursoClient.execute(`
+        SELECT id, agency, operator, incident_date, location_raw, latitude, longitude, commodity, volume_released, unit, severity_score, raw_data_json 
+        FROM incidents 
+        ORDER BY incident_date DESC 
+        LIMIT 100
+      `);
+      rows = result.rows;
+    } else {
+      const incidentsDbPath = '/home/team/shared/incidents.db';
+      incDb = new Database(incidentsDbPath, { readonly: true });
+      
+      const stmt = incDb.prepare(`
+        SELECT id, agency, operator, incident_date, location_raw, latitude, longitude, commodity, volume_released, unit, severity_score, raw_data_json 
+        FROM incidents 
+        ORDER BY incident_date DESC 
+        LIMIT 100
+      `);
+      rows = stmt.all();
+    }
     
     const mapped = rows.map(row => {
       let county = 'Unknown County';
@@ -632,7 +771,7 @@ app.get('/api/incidents', (req, res) => {
       
       try {
         if (row.raw_data_json) {
-          const parsed = JSON.parse(row.raw_data_json);
+          const parsed = typeof row.raw_data_json === 'string' ? JSON.parse(row.raw_data_json) : row.raw_data_json;
           if (parsed.CountyName) {
             county = parsed.CountyName.trim();
           }
@@ -688,7 +827,7 @@ app.get('/api/incidents', (req, res) => {
       incidents: mapped
     });
   } catch (err) {
-    console.error('Error fetching incidents from shared db:', err);
+    console.error('Error fetching incidents:', err);
     res.status(500).json({
       success: false,
       message: 'Failed to retrieve live incident logs from shared repository.'
@@ -705,10 +844,16 @@ app.get('/api/incidents', (req, res) => {
 });
 
 // GET Route to list queued routing alerts (Task ID: 469c97b4-16b8-41d6-90b4-0617e2ea12a6)
-app.get('/api/outbox', (req, res) => {
+app.get('/api/outbox', async (req, res) => {
   try {
-    const stmt = db.prepare('SELECT * FROM outbox ORDER BY created_at DESC');
-    const alerts = stmt.all();
+    let alerts = [];
+    if (useTurso && tursoClient) {
+      const result = await tursoClient.execute('SELECT * FROM outbox ORDER BY created_at DESC');
+      alerts = result.rows;
+    } else {
+      const stmt = db.prepare('SELECT * FROM outbox ORDER BY created_at DESC');
+      alerts = stmt.all();
+    }
     res.json({ success: true, count: alerts.length, alerts });
   } catch (err) {
     console.error('Database read error:', err);
@@ -720,8 +865,18 @@ app.get('/api/outbox', (req, res) => {
 app.post('/api/partner/retry-dispatch/:id', verifyPasscode, async (req, res) => {
   const alertId = req.params.id;
   try {
-    const stmt = db.prepare('SELECT * FROM outbox WHERE id = ?');
-    const alert = stmt.get(alertId);
+    let alert = null;
+    if (useTurso && tursoClient) {
+      const result = await tursoClient.execute({
+        sql: 'SELECT * FROM outbox WHERE id = ?',
+        args: [alertId]
+      });
+      alert = result.rows[0];
+    } else {
+      const stmt = db.prepare('SELECT * FROM outbox WHERE id = ?');
+      alert = stmt.get(alertId);
+    }
+
     if (!alert) {
       return res.status(404).json({ success: false, message: 'Alert outbox record not found.' });
     }
@@ -736,8 +891,18 @@ app.post('/api/partner/retry-dispatch/:id', verifyPasscode, async (req, res) => 
     }
 
     // Fetch the lead associated with this outbox alert
-    const leadStmt = db.prepare('SELECT * FROM leads WHERE id = ?');
-    const lead = leadStmt.get(alert.lead_id);
+    let lead = null;
+    if (useTurso && tursoClient) {
+      const leadResult = await tursoClient.execute({
+        sql: 'SELECT * FROM leads WHERE id = ?',
+        args: [alert.lead_id]
+      });
+      lead = leadResult.rows[0];
+    } else {
+      const leadStmt = db.prepare('SELECT * FROM leads WHERE id = ?');
+      lead = leadStmt.get(alert.lead_id);
+    }
+
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Associated lead record not found.' });
     }
@@ -828,21 +993,39 @@ app.post('/api/partner/retry-dispatch/:id', verifyPasscode, async (req, res) => 
       body: JSON.stringify(payload)
     });
 
+    const statusVal = response.ok ? 'sent' : 'failed';
+    if (useTurso && tursoClient) {
+      await tursoClient.execute({
+        sql: "UPDATE outbox SET status = ? WHERE id = ?",
+        args: [statusVal, alertId]
+      });
+    } else {
+      const updateStmt = db.prepare("UPDATE outbox SET status = ? WHERE id = ?");
+      updateStmt.run(statusVal, alertId);
+    }
+
     if (response.ok) {
-      const updateStmt = db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?");
-      updateStmt.run(alertId);
       console.log(`[CRM RETRY SUCCESS] Webhook sent successfully for alert ${alertId}`);
       return res.json({ success: true, message: 'Alert re-dispatched and sent successfully.' });
     } else {
-      const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
-      updateStmt.run(alertId);
       console.log(`[CRM RETRY FAILED] Webhook responded with status: ${response.status} for alert ${alertId}`);
       return res.status(response.status).json({ success: false, message: `CRM webhook responded with error status: ${response.status}` });
     }
   } catch (err) {
     console.error('Error retrying outbox dispatch:', err);
-    const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
-    updateStmt.run(alertId);
+    if (useTurso && tursoClient) {
+      try {
+        await tursoClient.execute({
+          sql: "UPDATE outbox SET status = 'failed' WHERE id = ?",
+          args: [alertId]
+        });
+      } catch (e) {}
+    } else {
+      try {
+        const updateStmt = db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ?");
+        updateStmt.run(alertId);
+      } catch (e) {}
+    }
     res.status(500).json({ success: false, message: 'Failed to re-dispatch alert: ' + err.message });
   }
 });

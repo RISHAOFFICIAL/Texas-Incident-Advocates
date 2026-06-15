@@ -1,0 +1,8 @@
+{
+  "name": "texas-pipeline-safety-board",
+  "version": "1.0.0",
+  "description": "Texas Pipeline Safety Board watchdog feed and Partner Portal",
+  "scripts": {
+    "build": "cd website && npm install && npm run build"
+  }
+}
